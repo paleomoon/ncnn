@@ -14,6 +14,7 @@
 
 #include "innerproduct_x86.h"
 
+#if __SSE2__
 #include <emmintrin.h>
 #include "sse_activation.h"
 #include "sse_usability.h"
@@ -23,6 +24,7 @@
 #include "avx_activation.h"
 #include "avx_usability.h"
 #endif
+#endif // __SSE2__
 
 #include "layer_type.h"
 
@@ -30,10 +32,12 @@ namespace ncnn {
 
 InnerProduct_x86::InnerProduct_x86()
 {
+#if __SSE2__
     support_packing = true;
 #if __AVX__
     support_weight_fp16_storage = true;
 #endif
+#endif // __SSE2__
 
     flatten = 0;
 }
@@ -64,6 +68,7 @@ int InnerProduct_x86::create_pipeline(const Option& opt)
     int elempack = 1;
     int out_elempack = 1;
 
+#if __SSE2__
     if (opt.use_packing_layout)
     {
 #if __AVX__
@@ -74,6 +79,7 @@ int InnerProduct_x86::create_pipeline(const Option& opt)
         out_elempack = num_output % 4 == 0 ? 4 : 1;
 #endif
     }
+#endif // __SSE2__
 
     if (elempack == 1 && out_elempack == 1)
     {
@@ -149,6 +155,7 @@ int InnerProduct_x86::forward(const Mat& bottom_blob, Mat& top_blob, const Optio
     int elempack = bottom_blob_flattened.elempack;
 
     int out_elempack = 1;
+#if __SSE2__
     if (opt.use_packing_layout)
     {
 #if __AVX__
@@ -157,12 +164,14 @@ int InnerProduct_x86::forward(const Mat& bottom_blob, Mat& top_blob, const Optio
         out_elempack = num_output % 4 == 0 ? 4 : 1;
 #endif
     }
+#endif // __SSE2__
     size_t out_elemsize = elemsize / elempack * out_elempack;
 
     top_blob.create(num_output / out_elempack, out_elemsize, out_elempack, opt.blob_allocator);
     if (top_blob.empty())
         return -100;
 
+#if __SSE2__
 #if __AVX__
     if (elempack == 8 && out_elempack == 8)
     {
@@ -213,7 +222,7 @@ int InnerProduct_x86::forward(const Mat& bottom_blob, Mat& top_blob, const Optio
                 kptr += 64;
             }
 
-            _sum = activation_ps(_sum, activation_type, activation_params);
+            _sum = activation_avx(_sum, activation_type, activation_params);
 
             float* outptr = top_blob;
             _mm256_storeu_ps(outptr + p * 8, _sum);
@@ -247,7 +256,7 @@ int InnerProduct_x86::forward(const Mat& bottom_blob, Mat& top_blob, const Optio
                 kptr += 8;
             }
 
-            _sum = activation_ps(_sum, activation_type, activation_params);
+            _sum = activation_avx(_sum, activation_type, activation_params);
 
             float* outptr = top_blob;
             _mm256_storeu_ps(outptr + p * 8, _sum);
@@ -291,7 +300,7 @@ int InnerProduct_x86::forward(const Mat& bottom_blob, Mat& top_blob, const Optio
                 kptr += 32;
             }
 
-            _sum = activation_ps(_sum, activation_type, activation_params);
+            _sum = activation_avx(_sum, activation_type, activation_params);
 
             float* outptr = top_blob;
             _mm256_storeu_ps(outptr + p * 8, _sum);
@@ -385,7 +394,7 @@ int InnerProduct_x86::forward(const Mat& bottom_blob, Mat& top_blob, const Optio
                 kptr += 32;
             }
 
-            _sum = activation_ps(_sum, activation_type, activation_params);
+            _sum = activation_sse(_sum, activation_type, activation_params);
 
             float* outptr = top_blob;
             _mm_storeu_ps(outptr + p * 4, _sum);
@@ -430,7 +439,7 @@ int InnerProduct_x86::forward(const Mat& bottom_blob, Mat& top_blob, const Optio
                 kptr += 16;
             }
 
-            _sum = activation_ps(_sum, activation_type, activation_params);
+            _sum = activation_sse(_sum, activation_type, activation_params);
 
             float* outptr = top_blob;
             _mm_storeu_ps(outptr + p * 4, _sum);
@@ -464,7 +473,7 @@ int InnerProduct_x86::forward(const Mat& bottom_blob, Mat& top_blob, const Optio
                 kptr += 4;
             }
 
-            _sum = activation_ps(_sum, activation_type, activation_params);
+            _sum = activation_sse(_sum, activation_type, activation_params);
 
             float* outptr = top_blob;
             _mm_storeu_ps(outptr + p * 4, _sum);
@@ -508,11 +517,13 @@ int InnerProduct_x86::forward(const Mat& bottom_blob, Mat& top_blob, const Optio
             outptr[p] = sum;
         }
     }
+#endif // __SSE2__
 
     if (elempack == 1 && out_elempack == 1)
     {
         const float* weight_data_ptr = weight_data;
 
+#if __SSE2__
 #if __AVX__
         int remain_num_output_start = 0;
         int nn_num_output = num_output >> 3;
@@ -619,7 +630,7 @@ int InnerProduct_x86::forward(const Mat& bottom_blob, Mat& top_blob, const Optio
             __m256 _sums = HorizontalSums(_sum0, _sum1, _sum2, _sum3, _sum4, _sum5, _sum6, _sum7);
             __m256 _sums_f = _mm256_loadu_ps(sums);
             _sums = _mm256_add_ps(_sums_f, _sums);
-            _sums = activation_ps(_sums, activation_type, activation_params);
+            _sums = activation_avx(_sums, activation_type, activation_params);
 
             float* outptr = top_blob;
             _mm256_storeu_ps(outptr + p, _sums);
@@ -731,13 +742,16 @@ int InnerProduct_x86::forward(const Mat& bottom_blob, Mat& top_blob, const Optio
             _sums = _mm_add_ps(_sum1l, _sums);
             _sums = _mm_add_ps(_sum2l, _sums);
             _sums = _mm_add_ps(_sum3l, _sums);
-            _sums = activation_ps(_sums, activation_type, activation_params);
+            _sums = activation_sse(_sums, activation_type, activation_params);
 
             float* outptr = top_blob;
             _mm_storeu_ps(outptr + p, _sums);
         }
 
         remain_num_output_start += (nn_num_output << 2);
+#else
+        int remain_num_output_start = 0;
+#endif // __SSE2__
 
         // num_output
         #pragma omp parallel for num_threads(opt.num_threads)
@@ -753,6 +767,7 @@ int InnerProduct_x86::forward(const Mat& bottom_blob, Mat& top_blob, const Optio
             const float* m = bottom_blob_flattened;
 
             int i = 0;
+#if __SSE2__
 #if __AVX__
             __m256 _sum = _mm256_set1_ps(0.f);
             for (; i + 7 < size; i += 8)
@@ -777,6 +792,7 @@ int InnerProduct_x86::forward(const Mat& bottom_blob, Mat& top_blob, const Optio
                 m += 4;
                 w += 4;
             }
+#endif // __SSE2__
             for (; i < size; i++)
             {
                 sum += *m * *w;
@@ -784,11 +800,39 @@ int InnerProduct_x86::forward(const Mat& bottom_blob, Mat& top_blob, const Optio
                 w++;
             }
 
+#if __SSE2__
 #if __AVX__
             sum += _mm256_reduce_add_ps(_sum);
 #endif
             sum += _mm_reduce_add_ps(_suml);
-            sum = activation_ss(sum, activation_type, activation_params);
+#endif // __SSE2__
+
+            if (activation_type == 1)
+            {
+                sum = std::max(sum, 0.f);
+            }
+            else if (activation_type == 2)
+            {
+                float slope = activation_params[0];
+                sum = sum > 0.f ? sum : sum * slope;
+            }
+            else if (activation_type == 3)
+            {
+                float min = activation_params[0];
+                float max = activation_params[1];
+                if (sum < min)
+                    sum = min;
+                if (sum > max)
+                    sum = max;
+            }
+            else if (activation_type == 4)
+            {
+                sum = static_cast<float>(1.f / (1.f + exp(-sum)));
+            }
+            else if (activation_type == 5)
+            {
+                sum = static_cast<float>(sum * tanh(log(exp(sum) + 1.f)));
+            }
 
             float* outptr = top_blob;
             outptr[p] = sum;
@@ -967,7 +1011,7 @@ int InnerProduct_x86::forward_fp16(const Mat& bottom_blob, Mat& top_blob, const 
 
         __m256 _sums = HorizontalSums(_sum0, _sum1, _sum2, _sum3, _sum4, _sum5, _sum6, _sum7);
         __m256 _sums_f = _mm256_loadu_ps(sums);
-        _sums = activation_ps(_mm256_add_ps(_sums_f, _sums), activation_type, activation_params);
+        _sums = activation_avx(_mm256_add_ps(_sums_f, _sums), activation_type, activation_params);
         _mm256_storeu_ps(output_ptr + p, _sums);
     }
 
@@ -1059,7 +1103,7 @@ int InnerProduct_x86::forward_fp16(const Mat& bottom_blob, Mat& top_blob, const 
         }
 
         __m128 _sums = HorizontalSums(_sum0, _sum1, _sum2, _sum3);
-        __m256 _sums_a = activation_ps(_mm256_castps128_ps256(_mm_add_ps(_mm_loadu_ps(sums), _sums)), activation_type, activation_params);
+        __m256 _sums_a = activation_avx(_mm256_castps128_ps256(_mm_add_ps(_mm_loadu_ps(sums), _sums)), activation_type, activation_params);
         _mm_storeu_ps(output_ptr + p, _mm256_castps256_ps128(_sums_a));
     }
 

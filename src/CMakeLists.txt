@@ -192,7 +192,11 @@ if(NCNN_OPENMP)
         endif()
 
         if(NCNN_SIMPLEOMP)
-            target_compile_options(ncnn PRIVATE -fopenmp)
+            if(IOS OR APPLE)
+                target_compile_options(ncnn PRIVATE -Xpreprocessor -fopenmp)
+            else()
+                target_compile_options(ncnn PRIVATE -fopenmp)
+            endif()
             target_link_libraries(ncnn PUBLIC pthread)
         elseif(ANDROID_NDK_MAJOR AND (ANDROID_NDK_MAJOR GREATER 20))
             target_compile_options(ncnn PRIVATE -fopenmp)
@@ -235,7 +239,7 @@ if(NCNN_VULKAN)
 endif()
 
 if(ANDROID_NDK)
-    target_link_libraries(ncnn PUBLIC android log)
+    target_link_libraries(ncnn PUBLIC android jnigraphics log)
 endif()
 
 if(WIN32)
@@ -244,6 +248,10 @@ endif()
 
 if(CMAKE_CXX_COMPILER_ID MATCHES "MSVC" OR (CMAKE_CXX_COMPILER_ID MATCHES "Clang" AND CMAKE_CXX_SIMULATE_ID MATCHES "MSVC"))
     target_compile_definitions(ncnn PRIVATE _SCL_SECURE_NO_WARNINGS _CRT_SECURE_NO_DEPRECATE)
+
+    if(CMAKE_BUILD_TYPE MATCHES "(Release|RELEASE|release)")
+        target_compile_options(ncnn PRIVATE /fp:fast)
+    endif()
 else()
     target_compile_options(ncnn PRIVATE -Wall -Wextra -Wno-unused-function)
 
@@ -252,7 +260,7 @@ else()
     endif()
 
     if(CMAKE_BUILD_TYPE MATCHES "(Release|RELEASE|release)")
-        if(NOT CMAKE_SYSTEM_NAME STREQUAL "Emscripten")
+        if(NOT CMAKE_SYSTEM_NAME STREQUAL "Emscripten" AND NOT (CMAKE_CXX_COMPILER_ID MATCHES "GNU" AND CMAKE_CXX_COMPILER_VERSION VERSION_LESS 4.6))
             target_compile_options(ncnn PRIVATE -Ofast)
         endif()
 
@@ -277,19 +285,20 @@ if(NCNN_DISABLE_EXCEPTION)
 endif()
 
 if(NCNN_TARGET_ARCH STREQUAL "x86")
-    # enable sse2 unconditionally
-    if(CMAKE_CXX_COMPILER_ID MATCHES "MSVC" OR (CMAKE_CXX_COMPILER_ID MATCHES "Clang" AND CMAKE_CXX_SIMULATE_ID MATCHES "MSVC"))
-        target_compile_options(ncnn PRIVATE /arch:SSE2 /DSSE2 /fp:strict)
-    else()
-        target_compile_options(ncnn PRIVATE -msse2 -msse)
-        if(CMAKE_SYSTEM_NAME STREQUAL "Emscripten")
-            target_compile_options(ncnn PRIVATE -msimd128)
+    if(NCNN_SSE2)
+        if(CMAKE_CXX_COMPILER_ID MATCHES "MSVC" OR (CMAKE_CXX_COMPILER_ID MATCHES "Clang" AND CMAKE_CXX_SIMULATE_ID MATCHES "MSVC"))
+            target_compile_options(ncnn PRIVATE /arch:SSE2 /D__SSE2__)
+        else()
+            target_compile_options(ncnn PRIVATE -msse2 -msse)
+            if(CMAKE_SYSTEM_NAME STREQUAL "Emscripten")
+                target_compile_options(ncnn PRIVATE -msimd128)
+            endif()
         endif()
     endif()
 
     if(NOT NCNN_RUNTIME_CPU AND NCNN_AVX2)
         if(CMAKE_CXX_COMPILER_ID MATCHES "MSVC" OR (CMAKE_CXX_COMPILER_ID MATCHES "Clang" AND CMAKE_CXX_SIMULATE_ID MATCHES "MSVC"))
-            target_compile_options(ncnn PRIVATE /arch:AVX2 /DAVX2 /fp:strict)
+            target_compile_options(ncnn PRIVATE /arch:AVX2)
         else()
             target_compile_options(ncnn PRIVATE -mfma -mf16c -mavx2)
         endif()
@@ -300,6 +309,11 @@ if(((IOS AND CMAKE_OSX_ARCHITECTURES MATCHES "arm64") OR (APPLE AND CMAKE_OSX_AR
     if (NOT NCNN_RUNTIME_CPU AND NCNN_ARM82)
         target_compile_options(ncnn PRIVATE -march=armv8.2-a+fp16)
     endif()
+endif()
+
+if(NCNN_COVERAGE)
+    target_compile_options(ncnn PUBLIC -coverage -fprofile-arcs -ftest-coverage)
+    target_link_libraries(ncnn PUBLIC -coverage -lgcov)
 endif()
 
 if(ANDROID OR IOS)
@@ -333,6 +347,7 @@ if(NCNN_INSTALL_SDK)
         simpleocv.h
         simpleomp.h
         simplestl.h
+        vulkan_header_fix.h
         ${CMAKE_CURRENT_BINARY_DIR}/layer_shader_type_enum.h
         ${CMAKE_CURRENT_BINARY_DIR}/layer_type_enum.h
         ${CMAKE_CURRENT_BINARY_DIR}/platform.h

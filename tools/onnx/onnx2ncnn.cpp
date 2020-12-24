@@ -1167,12 +1167,12 @@ static void fuse_groupnorm(onnx::GraphProto* mutable_graph, std::map<std::string
                 continue;
 
             // +eps
-            float eps = get_node_attr_f(*node2, "epsilon", 1e-05);
+            float eps = get_node_attr_f(*node2, "epsilon", 1e-05f);
 
             // InstanceNormalization S=1 B=0
             std::vector<float> S = get_node_attr_from_input_af(weights[node2->input(1)]);
             std::vector<float> B = get_node_attr_from_input_af(weights[node2->input(2)]);
-            if (S.size() != groups || B.size() != groups)
+            if ((int)S.size() != groups || (int)B.size() != groups)
                 continue;
 
             bool instancenorm_affine = false;
@@ -1219,7 +1219,7 @@ static void fuse_groupnorm(onnx::GraphProto* mutable_graph, std::map<std::string
             {
                 affine = 0;
             }
-            else if (affine_S.size() != channels && affine_B.size() != channels)
+            else if ((int)affine_S.size() != channels && (int)affine_B.size() != channels)
             {
                 // we only allow per-channel affine
                 continue;
@@ -1646,6 +1646,44 @@ static void fuse_reorg(onnx::GraphProto* mutable_graph, std::map<std::string, on
     }
 }
 
+static void fuse_expand_broadcast(onnx::GraphProto* mutable_graph, std::map<std::string, onnx::TensorProto>& weights, std::map<std::string, onnx::TensorProto>& binaryop_weights, std::map<std::string, int>& node_reference, std::set<std::string>& blob_names, int& reduced_node_count, std::vector<std::string>& reduced_binaryop_weights)
+{
+    int node_count = mutable_graph->node_size();
+    for (int i = 0; i < node_count; i++)
+    {
+        onnx::NodeProto* node = mutable_graph->mutable_node(i);
+
+        // Add/Sub/Mul/Div/Min/Max <= Expand - Add/Sub/Mul/Div/Min/Max
+        if (node->op_type() == "Expand")
+        {
+            if (node_reference.find(node->output(0)) == node_reference.end() || node_reference[node->output(0)] != 1)
+                continue;
+
+            if (i + 1 >= node_count)
+                continue;
+
+            onnx::NodeProto* node2 = mutable_graph->mutable_node(i + 1);
+
+            if (node2->op_type() != "Add" && node2->op_type() != "Sub" && node2->op_type() != "Mul" && node2->op_type() != "Div" && node2->op_type() != "Min" && node2->op_type() != "Max")
+                continue;
+
+            if (node2->input(1) != node->output(0) && node2->input(0) != node->output(0))
+                continue;
+
+            // reduce
+            node->set_op_type("noop_reducedncnn");
+
+            node_reference.erase(node_reference.find(node->output(0)));
+            blob_names.erase(node->output(0));
+
+            node2->set_input(1, node->input(0));
+
+            reduced_node_count += 1;
+            i += 1;
+        }
+    }
+}
+
 int main(int argc, char** argv)
 {
     const char* onnxpb = argv[1];
@@ -1747,6 +1785,70 @@ int main(int argc, char** argv)
 
                     continue;
                 }
+            }
+        }
+        else if (op == "Gemm")
+        {
+            float alpha = get_node_attr_f(node, "alpha", 1.f);
+            float beta = get_node_attr_f(node, "beta", 1.f);
+            int transA = get_node_attr_i(node, "transA", 0);
+            int transB = get_node_attr_i(node, "transB", 0);
+
+            if (alpha == 1.f && beta == 1.f && transA == 0 && transB == 1)
+            {
+                // InnerProduct-like A * B + C
+            }
+            else
+            {
+                // gemm A
+                const std::string& A = node.input(0);
+                std::map<std::string, onnx::TensorProto>::iterator itA = weights.find(A);
+                if (itA != weights.end())
+                {
+                    binaryop_weights[A] = itA->second;
+                    weights.erase(itA);
+                }
+
+                // gemm B
+                const std::string& B = node.input(1);
+                std::map<std::string, onnx::TensorProto>::iterator itB = weights.find(B);
+                if (itB != weights.end())
+                {
+                    binaryop_weights[B] = itB->second;
+                    weights.erase(itB);
+                }
+
+                if (node.input_size() == 3)
+                {
+                    // gemm C
+                    const std::string& C = node.input(2);
+                    std::map<std::string, onnx::TensorProto>::iterator itC = weights.find(C);
+                    if (itC != weights.end())
+                    {
+                        binaryop_weights[C] = itC->second;
+                        weights.erase(itC);
+                    }
+                }
+            }
+        }
+        else if (op == "MatMul")
+        {
+            // gemm A
+            const std::string& A = node.input(0);
+            std::map<std::string, onnx::TensorProto>::iterator itA = weights.find(A);
+            if (itA != weights.end())
+            {
+                binaryop_weights[A] = itA->second;
+                weights.erase(itA);
+            }
+
+            // gemm B can be weight when rank2
+            const std::string& B = node.input(1);
+            std::map<std::string, onnx::TensorProto>::iterator itB = weights.find(B);
+            if (itB != weights.end() && itB->second.dims_size() != 2)
+            {
+                binaryop_weights[B] = itB->second;
+                weights.erase(itB);
             }
         }
         else
@@ -1860,6 +1962,7 @@ int main(int argc, char** argv)
     fuse_flatten(mutable_graph, weights, binaryop_weights, node_reference, blob_names, reduced_node_count, reduced_binaryop_weights);
     fuse_pixelshuffle(mutable_graph, weights, binaryop_weights, node_reference, blob_names, reduced_node_count, reduced_binaryop_weights);
     fuse_reorg(mutable_graph, weights, binaryop_weights, node_reference, blob_names, reduced_node_count, reduced_binaryop_weights);
+    fuse_expand_broadcast(mutable_graph, weights, binaryop_weights, node_reference, blob_names, reduced_node_count, reduced_binaryop_weights);
 
     // remove node_reference entry with reference equals to one
     int splitncnn_blob_count = 0;
@@ -1878,7 +1981,22 @@ int main(int argc, char** argv)
         }
     }
 
-    fprintf(pp, "%lu %lu\n", node_count - reduced_node_count + input_node_count + node_reference.size() + binaryop_weights.size() - reduced_binaryop_weights.size(), blob_names.size() - reduced_binaryop_weights.size() + splitncnn_blob_count);
+    // we always treat constant node as weight or binaryop_weights
+    // do not count it twice for layer_count
+    int constant_node_count_moved_to_weight = 0;
+    for (int i = 0; i < node_count; i++)
+    {
+        const onnx::NodeProto& node = graph.node(i);
+
+        const std::string& op = node.op_type();
+
+        if (op == "Constant")
+        {
+            constant_node_count_moved_to_weight++;
+        }
+    }
+
+    fprintf(pp, "%zu %zu\n", node_count - reduced_node_count + input_node_count + node_reference.size() + binaryop_weights.size() - reduced_binaryop_weights.size() - constant_node_count_moved_to_weight, blob_names.size() - reduced_binaryop_weights.size() + splitncnn_blob_count);
 
     int internal_split = 0;
 
@@ -1922,9 +2040,9 @@ int main(int argc, char** argv)
     }
 
     // place MemoryData next
-    for (std::map<std::string, onnx::TensorProto>::iterator it = binaryop_weights.begin(); it != binaryop_weights.end(); it++)
+    for (std::map<std::string, onnx::TensorProto>::iterator weight_it = binaryop_weights.begin(); weight_it != binaryop_weights.end(); weight_it++)
     {
-        const std::string& input_name = it->first;
+        const std::string& input_name = weight_it->first;
 
         if (std::find(reduced_binaryop_weights.begin(), reduced_binaryop_weights.end(), input_name) != reduced_binaryop_weights.end())
             continue;
@@ -2072,18 +2190,7 @@ int main(int argc, char** argv)
         }
         else if (op == "Constant")
         {
-            // check weight before BinaryOp
-            if (binaryop_weights.find(node.output(0)) != binaryop_weights.end())
-            {
-                if (std::find(reduced_binaryop_weights.begin(), reduced_binaryop_weights.end(), node.output(0)) != reduced_binaryop_weights.end())
-                    continue;
-
-                fprintf(pp, "%-16s", "MemoryData");
-            }
-            else
-            {
-                continue;
-            }
+            continue;
         }
         else if (op == "Conv")
         {
@@ -2208,13 +2315,13 @@ int main(int argc, char** argv)
         }
         else if (op == "MatMul")
         {
-            if (weights.find(node.input(1)) == weights.end())
+            if (weights.find(node.input(1)) != weights.end() && weights[node.input(1)].dims_size() == 2)
             {
-                fprintf(pp, "%-16s", "Gemm");
+                fprintf(pp, "%-16s", "InnerProduct");
             }
             else
             {
-                fprintf(pp, "%-16s", "InnerProduct");
+                fprintf(pp, "%-16s", "Gemm");
             }
         }
         else if (op == "Max")
@@ -2549,37 +2656,7 @@ int main(int argc, char** argv)
         }
         else if (op == "Constant")
         {
-            // check weight before BinaryOp
-            if (binaryop_weights.find(name) != binaryop_weights.end())
-            {
-                const onnx::TensorProto& M = binaryop_weights[name];
-
-                if (M.dims_size() == 0)
-                {
-                    fprintf(pp, " 0=%d", get_tensor_proto_data_size(M));
-                }
-                else if (M.dims_size() == 1)
-                {
-                    fprintf(pp, " 0=%d", (int)M.dims(0));
-                }
-                else if (M.dims_size() == 2)
-                {
-                    fprintf(pp, " 0=%d", (int)M.dims(1));
-                }
-                else if (M.dims_size() == 3)
-                {
-                    fprintf(pp, " 0=%d", (int)M.dims(2));
-                    fprintf(pp, " 1=%d", (int)M.dims(1));
-                }
-                else if (M.dims_size() == 4)
-                {
-                    fprintf(pp, " 0=%d", (int)M.dims(3));
-                    fprintf(pp, " 1=%d", (int)M.dims(2));
-                    fprintf(pp, " 2=%d", (int)M.dims(1));
-                }
-
-                fwrite_tensor_proto_data(M, bp);
-            }
+            // never reach here
         }
         else if (op == "Conv")
         {
@@ -3196,11 +3273,7 @@ int main(int argc, char** argv)
         }
         else if (op == "MatMul")
         {
-            if (weights.find(node.input(1)) == weights.end())
-            {
-                // default matrix multiplication
-            }
-            else
+            if (weights.find(node.input(1)) != weights.end() && weights[node.input(1)].dims_size() == 2)
             {
                 // InnerProduct
                 const onnx::TensorProto& B = weights[node.input(1)];
@@ -3232,6 +3305,10 @@ int main(int argc, char** argv)
                 }
 
                 // fwrite_tensor_proto_data(B, bp)
+            }
+            else
+            {
+                // default matrix multiplication
             }
         }
         else if (op == "Max")
@@ -3395,11 +3472,11 @@ int main(int argc, char** argv)
                 // if axes set, reduce according to axes
                 fprintf(pp, " 1=%d", 0);
                 fprintf(pp, " -23303=%zu", axes.size());
-                for (int i = 0; i < axes.size(); i++)
+                for (size_t j = 0; j < axes.size(); j++)
                 {
-                    if (axes[i] == 0 || axes[i] > 3 || axes[i] < -3)
+                    if (axes[j] == 0 || axes[j] > 3 || axes[j] < -3)
                         fprintf(stderr, "Unsupported reduction axes !\n");
-                    fprintf(pp, ",%d", axes[i]);
+                    fprintf(pp, ",%d", axes[j]);
                 }
             }
             else
@@ -3654,7 +3731,7 @@ int main(int argc, char** argv)
             }
             else
             {
-                for (int i = 0; i < split.size() - 1; i++)
+                for (size_t i = 0; i < split.size() - 1; i++)
                 {
                     fprintf(pp, ",%d", split[i]);
                 }
