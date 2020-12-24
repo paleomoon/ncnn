@@ -20,6 +20,8 @@
 
 namespace ncnn {
 
+//blob作为最基本的数据结构，存储计算过程中的各种数据
+//blob类本身不存放具体的计算数据，只负责关联blob和相应层（该blob是哪个层的输出，哪个层的输入），真正的blob数据存放在blob_mats里
 class Blob
 {
 public:

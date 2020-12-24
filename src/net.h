@@ -266,7 +266,7 @@ protected:
 
 private:
     const Net* net;
-    std::vector<Mat> blob_mats;
+    std::vector<Mat> blob_mats; //整个网络中所有blob的真正数据
     Option opt;
 
 #if NCNN_VULKAN
