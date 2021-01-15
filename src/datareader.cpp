@@ -43,13 +43,13 @@ DataReaderFromStdio::DataReaderFromStdio(FILE* _fp)
 #if NCNN_STRING
 int DataReaderFromStdio::scan(const char* format, void* p) const
 {
-    return fscanf(fp, format, p);
+    return fscanf(fp, format, p); //适合读取网络结构文件.param
 }
 #endif // NCNN_STRING
 
 size_t DataReaderFromStdio::read(void* buf, size_t size) const
 {
-    return fread(buf, 1, size, fp);
+    return fread(buf, 1, size, fp); //适合读取权重文件.bin
 }
 #endif // NCNN_STDIO
 
