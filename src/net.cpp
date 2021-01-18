@@ -192,10 +192,12 @@ int Net::load_param(const DataReader& dr)
         SCAN_VALUE("%d", top_count)
 
         Layer* layer = create_layer(layer_type);
+        //如果layer不是默认类型，创建自定义layer
         if (!layer)
         {
             layer = create_custom_layer(layer_type);
         }
+        //如果自定义layer没有注册过
         if (!layer)
         {
             NCNN_LOGE("layer %s not exists or registered", layer_type);
