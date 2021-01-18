@@ -142,7 +142,7 @@ protected:
     int destroy_pipeline();
 
 #endif // NCNN_VULKAN
-
+    //友元类，主要作用让Extractor对象可以访问Net对象中的私有和保护的属性和函数
     friend class Extractor;
 #if NCNN_STRING
     int find_blob_index_by_name(const char* name) const;
