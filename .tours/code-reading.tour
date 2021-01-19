@@ -1,0 +1,31 @@
+{
+  "$schema": "https://aka.ms/codetour-schema",
+  "title": "code-reading",
+  "steps": [
+    {
+      "file": "src/net.cpp",
+      "line": 1071,
+      "description": "static_cast更安全，https://stackoverflow.com/questions/103512/why-use-static-castintx-instead-of-intx"
+    },
+    {
+      "file": "src/net.cpp",
+      "line": 234,
+      "description": "如果没有找到，则向blobs的vector中插入一个名为bottom_name的blob"
+    },
+    {
+      "file": "src/net.cpp",
+      "line": 248,
+      "description": "第i层以当前blob作为层的输入"
+    },
+    {
+      "file": "src/net.cpp",
+      "line": 253,
+      "description": "输出数据结构的初始化基本和输入数据结构的初始化相同"
+    },
+    {
+      "file": "src/net.cpp",
+      "line": 250,
+      "description": "第i层的输入数据结构的第j个输入"
+    }
+  ]
+}
